@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"path": "../.git"
+		},
+		{
+			"name": "Char-bigram-LM",
+			"path": "../repo_char_bigram_LM/Char-bigram-LM"
+		}
+	],
+	"settings": {}
+}
