@@ -1,4 +1,5 @@
 # Import necessary libraries
+import math
 from dataclasses import dataclass
 import torch
 import torch.nn as nn
@@ -15,35 +16,55 @@ class CausalSelfAttention(nn.Module):
 
     def __init__(self, config):
         super().__init__()
+        # Ensure the number of embedding dimensions (n_embd) is divisible by the number of heads (n_head),
+        # which is a requirement for multi-head attention.
         assert config.n_embd % config.n_head == 0
         # key, query, value projections for all heads, but in a batch
+        # A linear layer that projects the input into query, key, and value vectors. 
+        # The output dimension is 3 * config.n_embd because we need separate vectors for queries, keys, and values.
         self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd)
         # output projection
+        #A linear layer that projects the concatenated output of the attention heads back to the 
+        # original embedding size.
         self.c_proj = nn.Linear(config.n_embd, config.n_embd)
         # regularization
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         # not really a 'bias', more of a mask, but following the OpenAI/HF naming though
+        # A lower triangular matrix used as a causal mask to prevent attending to future tokens.
         self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
                                      .view(1, 1, config.block_size, config.block_size))
+        #self.register_buffer is a method provided by PyTorch's nn.Module class, which is used to register
+        # a tensor as a buffer in the module. Buffers are similar to parameters, but they are
+        # non-trainable and persistent.
+        # self.register_buffer(name, tensor) -> name (str): The name of the buffer, tensor (Tensor): The tensor to register as a buffer.
 
     def forward(self, x):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
         # nh is "number of heads", hs is "head size", and C (number of channels) = nh * hs
         # e.g. in GPT-2 (124M), n_head=12, hs=64, so nh*hs=C=768 channels in the Transformer
-        qkv = self.c_attn(x)
-        q, k, v = qkv.split(self.n_embd, dim=2)
+        qkv = self.c_attn(x) #  Projects input x into a combined query, key, and value vector of shape (B, T, 3 * C)
+        q, k, v = qkv.split(self.n_embd, dim=2) # Splits the combined vector into three parts: query (q), key (k), and value (v), each of shape (B, T, C)
+        # split() method splits a tensor into multiple sub-tensors along a specified dimension.
+        
+        # Reshape for multi head attention
+        # Reshapes q, k, and v to separate the heads and then transposes to bring the head dimension forward, 
+        # resulting in shape (B, nh, T, hs)
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         # attention (materializes the large (T,T) matrix for all the queries and keys)
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
-        att = F.softmax(att, dim=-1)
+        att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf')) # Applies the causal mask to prevent attending to future tokens.
+        att = F.softmax(att, dim=-1) # Applies the softmax function to obtain the attention weights.
+        # Computes the weighted sum of values based on the attention weights, resulting in shape (B, nh, T, hs).
         y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        
+        #Transposes and reshapes the output to combine the heads back into the original embedding size.
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
         # output projection
+        # self.c_proj(y) applies the final linear layer to project the concatenated output back to the embedding size.
         y = self.c_proj(y)
         return y
 
@@ -114,6 +135,14 @@ class GPT(nn.Module):
         logits = self.lm_head(x) # (B, T, vocab_size)
         return logits
 
+    # @classmethod is a decorator used to define a method that is bound to the class and not the 
+    # instance of the class. This means that the method can be called on the class itself, 
+    # rather than on instances of the class.
+    # Bound to the Class: A class method receives the class as its first argument, conventionally 
+    # named cls, which stands for class. This is similar to instance methods, which receive the 
+    # instance as their first argument, conventionally named self
+    # Class methods can access and modify class variables that are shared among all instances of the class.
+    # Class methods do not have access to instance variables or methods directly unless the instance is passed to them.
     @classmethod
     def from_pretrained(cls, model_type):
         """Loads pretrained GPT-2 model weights from huggingface"""
@@ -166,4 +195,3 @@ class GPT(nn.Module):
 # -----------------------------------------------------------------------------
 model = GPT.from_pretrained('gpt2')
 print("didn't crash yay!")
-        
