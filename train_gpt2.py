@@ -257,6 +257,9 @@ class DataLoaderLite:
 
 #-----------------------------------------------------------------------------
 # attempt to autodetect the device
+
+import time
+
 device = "cpu"
 if torch.cuda.is_available():
     device = "cuda"
@@ -264,7 +267,10 @@ elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
     device = "mps"
 print(f"using device: {device}")
 
-train_loader = DataLoaderLite(B=4, T=32)
+train_loader = DataLoaderLite(B=4, T=1024)
+
+torch.set_float32_matmul_precision('high') # high means float32.
+# A100 - the Ampeare series GPU will run 8x faster converting the calculations to TF32 inside it's hardware.
 
 # get logits
 model = GPT(GPTConfig())  # randomly initialized model
@@ -272,14 +278,24 @@ model.to(device)
 
 # Optimizer
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
-for i in range(50):
+for i in range(10):
+    t0 = time.time()
+    # The time.time() function in Python returns the current time in seconds since the Epoch
     x, y = train_loader.next_batch()
     x, y = x.to(device), y.to(device)
     optimizer.zero_grad()
-    logits, loss = model(x, y)
+    with torch.autocast(device_type = device, dtype=torch.bfloat16): # converting float32 to bfloats for faster calculations
+        logits, loss = model(x, y)
+    # import code; code.interact(local=locals())
+    # The code.interact function from Python's code module provides an interactive console that you can use to 
+    #inspect and manipulate the current local variables and environment. This can be particularly useful for debugging or exploring code.
     loss.backward()
     optimizer.step()
-    print(f"step {i}, loss : {loss.item()}")
+    torch.cuda.synchronize() # CPU will wait for the GPU to finish running, then we can take time.
+    t1 = time.time()
+    dt = (t1 - t0) * 1000 # time difference in milli seconds
+    tokens_per_sec = (train_loader.B * train_loader.T) / (t1 - t0)
+    print(f"step {i}, loss : {loss.item()}, dt: {dt:.2f}ms, tok/sec: {tokens_per_sec}")
 
 import sys; sys.exit(0)
 
