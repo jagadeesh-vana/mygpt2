@@ -56,11 +56,15 @@ class CausalSelfAttention(nn.Module):
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         # attention (materializes the large (T,T) matrix for all the queries and keys)
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf')) # Applies the causal mask to prevent attending to future tokens.
-        att = F.softmax(att, dim=-1) # Applies the softmax function to obtain the attention weights.
+        
+        #att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+        #att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf')) # Applies the causal mask to prevent attending to future tokens.
+        #att = F.softmax(att, dim=-1) # Applies the softmax function to obtain the attention weights.
         # Computes the weighted sum of values based on the attention weights, resulting in shape (B, nh, T, hs).
-        y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        #y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+
+        # Flash Attention is 7.6x times faster because of kernel infusion of the above 4 steps.
+        y = F.scaled_dot_product_attention(q, k, v, is_causal = True)
         
         #Transposes and reshapes the output to combine the heads back into the original embedding size.
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
@@ -273,8 +277,10 @@ torch.set_float32_matmul_precision('high') # high means float32.
 # A100 - the Ampeare series GPU will run 8x faster converting the calculations to TF32 inside it's hardware.
 
 # get logits
-model = GPT(GPTConfig())  # randomly initialized model
+model = GPT(GPTConfig(vocab_size = 50304))  # randomly initialized model
+# making vocab size a nice number that is divisible by 2, 4, 8, 16, 32 and so on.
 model.to(device)
+model = torch.compile(model) # Speedup mainly comes from reducing python overheads (no interpreter) and GPU read/writes
 
 # Optimizer
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
