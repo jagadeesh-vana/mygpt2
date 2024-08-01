@@ -282,9 +282,32 @@ model = GPT(GPTConfig(vocab_size = 50304))  # randomly initialized model
 model.to(device)
 model = torch.compile(model) # Speedup mainly comes from reducing python overheads (no interpreter) and GPU read/writes
 
+max_lr = 6e-4
+min_lr = max_lr * 0.1
+warmup_steps = 5
+max_steps = 10
+
+def get_lr(it):  # learning rate scheduler function 
+
+    # 1) linear warmup for warmup_iter steps
+    if it < warmup_steps:
+        return max_lr * (it + 1) / warmup_steps
+
+    # 2) if it > lr_decay_iters, return min learning rate
+    if it > max_steps:
+        return min_lr
+    
+    # 3) in between use cosine decay down to min learning rate
+    decay_ratio = (it - warmup_steps) / (max_steps - warmup_steps)
+    assert 0 <= decay_ratio <= 1
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff starts at 1 and goes to 0
+
+    return min_lr + coeff * (max_lr - min_lr)
+
 # Optimizer
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), eps=1e-8)
-for i in range(10):
+
+for step in range(max_steps):  # step - the notion of a single optimization step
     t0 = time.time()
     # The time.time() function in Python returns the current time in seconds since the Epoch
     x, y = train_loader.next_batch()
@@ -297,13 +320,19 @@ for i in range(10):
     #inspect and manipulate the current local variables and environment. This can be particularly useful for debugging or exploring code.
     loss.backward()
     norm = torch.nn.utils.clip_grad_norm(model.parameters(), 1.0) # clip the global norm of the gradient at 1.0
+    
+      # determine and set learning rate for this iteration
+    lr = get_lr(step)
+    for parm_group in optimizer.param_groups:
+        parm_group['lr'] = lr
+  
     optimizer.step()
     torch.cuda.synchronize() # CPU will wait for the GPU to finish running, then we can take time.
     t1 = time.time()
     dt = (t1 - t0) * 1000 # time difference in milli seconds
     tokens_per_sec = (train_loader.B * train_loader.T) / (t1 - t0)
-    print(f"step {i} | loss : {loss.item()} | norm: {norm:.4f} | dt: {dt:.2f}ms, tok/sec: {tokens_per_sec}")
-
+    print(f"step {step:4d} | loss : {loss.item()} | lr {lr:.4e} | norm: {norm:.4f} | dt: {dt:.2f}ms, tok/sec: {tokens_per_sec}")
+   
 import sys; sys.exit(0)
 
 # Generate from the model
