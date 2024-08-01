@@ -283,7 +283,7 @@ model.to(device)
 model = torch.compile(model) # Speedup mainly comes from reducing python overheads (no interpreter) and GPU read/writes
 
 # Optimizer
-optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4)
+optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, betas=(0.9, 0.95), eps=1e-8)
 for i in range(10):
     t0 = time.time()
     # The time.time() function in Python returns the current time in seconds since the Epoch
@@ -296,12 +296,13 @@ for i in range(10):
     # The code.interact function from Python's code module provides an interactive console that you can use to 
     #inspect and manipulate the current local variables and environment. This can be particularly useful for debugging or exploring code.
     loss.backward()
+    norm = torch.nn.utils.clip_grad_norm(model.parameters(), 1.0) # clip the global norm of the gradient at 1.0
     optimizer.step()
     torch.cuda.synchronize() # CPU will wait for the GPU to finish running, then we can take time.
     t1 = time.time()
     dt = (t1 - t0) * 1000 # time difference in milli seconds
     tokens_per_sec = (train_loader.B * train_loader.T) / (t1 - t0)
-    print(f"step {i}, loss : {loss.item()}, dt: {dt:.2f}ms, tok/sec: {tokens_per_sec}")
+    print(f"step {i} | loss : {loss.item()} | norm: {norm:.4f} | dt: {dt:.2f}ms, tok/sec: {tokens_per_sec}")
 
 import sys; sys.exit(0)
 
